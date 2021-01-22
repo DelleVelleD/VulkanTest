@@ -3,4 +3,9 @@
   <ItemGroup>
     <ClCompile Include="..\code\main.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\shaders\shader.frag" />
+    <None Include="..\shaders\shader.vert" />
+    <None Include="..\shaders\compile.bat" />
+  </ItemGroup>
 </Project>
