@@ -1,0 +1,2 @@
+C:\github\VulkanTest\build\VulkanTest.exe
+C:\github\VulkanTest\build\VulkanTest.pdb
