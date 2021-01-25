@@ -16,6 +16,9 @@ https://vulkan-tutorial.com/en/Vertex_buffers/Staging_buffer#page_Conclusion:~:t
 https://vulkan-tutorial.com/en/Vertex_buffers/Index_buffer#page_Using-an-index-buffer:~:text=The%20previous
 https://vulkan-tutorial.com/en/Uniform_buffers/Descriptor_layout_and_buffer#page_Updating-uniform-data:~:text=Using%20a%20UBO
 https://vulkan-tutorial.com/en/Texture_mapping/Combined_image_sampler#page_Updating-the-descriptors:~:text=determined.-,It%20is
+https://vulkan-tutorial.com/en/Generating_Mipmaps#page_Generating-Mipmaps:~:text=Beware%20if%20you
+https://vulkan-tutorial.com/en/Generating_Mipmaps#page_Linear-filtering-support:~:text=There%20are%20two
+https://vulkan-tutorial.com/en/Multisampling#page_Conclusion:~:text=features%2C-,like
 */
 
 #define GLFW_INCLUDE_VULKAN
@@ -49,6 +52,7 @@ https://vulkan-tutorial.com/en/Texture_mapping/Combined_image_sampler#page_Updat
 #include <chrono>
 #include <unordered_map>
 
+typedef int32_t int32;
 typedef uint32_t uint32;
 typedef uint16_t uint16;
 
@@ -177,6 +181,7 @@ struct VulkanTestApp {
 	VkSurfaceKHR surface;
 	
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 	VkDevice device;
 	
 	VkQueue graphicsQueue;
@@ -196,10 +201,15 @@ struct VulkanTestApp {
 	
 	VkCommandPool commandPool;
 	
+	VkImage colorImage;
+	VkDeviceMemory colorImageMemory;
+	VkImageView colorImageView;
+	
 	VkImage depthImage;
 	VkDeviceMemory depthImageMemory;
 	VkImageView depthImageView;
 	
+	uint32 mipLevels;
 	VkImage textureImage;
 	VkDeviceMemory textureImageMemory;
 	VkImageView textureImageView;
@@ -208,7 +218,7 @@ struct VulkanTestApp {
 	std::vector<Vertex> vertices;
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;
-	std::vector<uint32_t> indices;
+	std::vector<uint32> indices;
 	VkBuffer indexBuffer;
 	VkDeviceMemory indexBufferMemory;
 	
@@ -261,6 +271,7 @@ struct VulkanTestApp {
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
+		createColorResources();
 		createDepthResources();
 		createFramebuffers();
 		createTextureImage();
@@ -277,7 +288,7 @@ struct VulkanTestApp {
 	}
 	
 	void mainLoop() {
-		std::cout << "\n{-} Initializing Main Loop {-}" << std::endl;
+		std::cout << "{-} Initializing Main Loop {-}" << std::endl;
 		while(!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 			drawFrame();
@@ -288,23 +299,35 @@ struct VulkanTestApp {
 	void cleanup() {
 		std::cout << "{-} Initializing Cleanup {-}\n" << std::endl;
 		cleanupSwapChain();
+		
 		vkDestroySampler(device, textureSampler, nullptr);
 		vkDestroyImageView(device, textureImageView, nullptr);
+		
 		vkDestroyImage(device, textureImage, nullptr);
 		vkFreeMemory(device, textureImageMemory, nullptr);
+		
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		
 		vkDestroyBuffer(device, indexBuffer, nullptr);
         vkFreeMemory(device, indexBufferMemory, nullptr);
+		
 		vkDestroyBuffer(device, vertexBuffer, nullptr);
 		vkFreeMemory(device, vertexBufferMemory, nullptr);
+		
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
 			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence(device, inFlightFences[i], nullptr);
 		}
+		
 		vkDestroyCommandPool(device, commandPool, nullptr);
+		
 		vkDestroyDevice(device, nullptr);
-		if(enableValidationLayers) DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+		
+		if(enableValidationLayers){ 
+			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+		}
+		
 		vkDestroySurfaceKHR(instance, surface, nullptr);
 		vkDestroyInstance(instance, nullptr);
 		glfwDestroyWindow(window);
@@ -312,22 +335,34 @@ struct VulkanTestApp {
 	}
 	
 	void cleanupSwapChain() {
-		for (auto framebuffer : swapChainFramebuffers) {
-			vkDestroyFramebuffer(device, framebuffer, nullptr);
-		}
 		vkDestroyImageView(device, depthImageView, nullptr);
 		vkDestroyImage(device, depthImage, nullptr);
 		vkFreeMemory(device, depthImageMemory, nullptr);
-		vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+		
+		vkDestroyImageView(device, colorImageView, nullptr);
+		vkDestroyImage(device, colorImage, nullptr);
+		vkFreeMemory(device, colorImageMemory, nullptr);
+		
+		for (auto framebuffer : swapChainFramebuffers) {
+			vkDestroyFramebuffer(device, framebuffer, nullptr);
+		}
+		
+		vkFreeCommandBuffers(device, commandPool, static_cast<uint32>(commandBuffers.size()), commandBuffers.data());
+		
 		vkDestroyPipeline(device, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
-		for (auto imageView : swapChainImageViews) { vkDestroyImageView(device, imageView, nullptr); }
+		
+		for (auto imageView : swapChainImageViews) { 
+			vkDestroyImageView(device, imageView, nullptr);
+		}
 		vkDestroySwapchainKHR(device, swapChain, nullptr);
+		
 		for (size_t i = 0; i < swapChainImages.size(); i++) {
 			vkDestroyBuffer(device, uniformBuffers[i], nullptr);
 			vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
 		}
+		
 		vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 	}
 	
@@ -349,6 +384,7 @@ struct VulkanTestApp {
 		createImageViews();
 		createRenderPass();
 		createGraphicsPipeline();
+		createColorResources();
 		createDepthResources();
 		createFramebuffers();
 		createUniformBuffers();
@@ -377,7 +413,7 @@ struct VulkanTestApp {
 		VkInstanceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		createInfo.pApplicationInfo = &appInfo;
-		createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+		createInfo.enabledExtensionCount = static_cast<uint32>(extensions.size());
 		createInfo.ppEnabledExtensionNames = extensions.data();
 		if(enableValidationLayers) {
 			createInfo.enabledLayerCount = static_cast<uint32>(validationLayers.size());
@@ -431,6 +467,7 @@ struct VulkanTestApp {
 		for(auto& device : devices) {
 			if(isDeviceSuitable(device)) {
 				physicalDevice = device;
+				msaaSamples = getMaxUsableSampleCount();
 				break;
 			}
 		}
@@ -459,6 +496,7 @@ struct VulkanTestApp {
 		
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		deviceFeatures.samplerAnisotropy = VK_TRUE;
+		deviceFeatures.sampleRateShading = VK_TRUE; //enable sample shading feature for the device, VK_FALSE to disable sample shading
 		
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -497,7 +535,7 @@ struct VulkanTestApp {
 		}
 		
 		QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-		uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+		uint32 queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 		
 		VkSwapchainCreateInfoKHR createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -540,8 +578,8 @@ struct VulkanTestApp {
 		std::cout << "{-}{-} Creating Image Views {-}{-}" << std::endl;
 		swapChainImageViews.resize(swapChainImages.size());
 		
-		for (uint32_t i = 0; i < swapChainImages.size(); i++) {
-			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+		for (uint32 i = 0; i < swapChainImages.size(); i++) {
+			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 		}
 	}
 	
@@ -551,21 +589,17 @@ struct VulkanTestApp {
 		std::cout << "{-}{-} Creating Render Pass {-}{-}" << std::endl;
 		VkAttachmentDescription colorAttachment{};
 		colorAttachment.format = swapChainImageFormat;
-		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachment.samples = msaaSamples;
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		
-		VkAttachmentReference colorAttachmentRef{};
-		colorAttachmentRef.attachment = 0;
-		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		
 		VkAttachmentDescription depthAttachment{};
 		depthAttachment.format = findDepthFormat();
-		depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		depthAttachment.samples = msaaSamples;
 		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -573,15 +607,34 @@ struct VulkanTestApp {
 		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 		
+		VkAttachmentDescription colorAttachmentResolve{};
+		colorAttachmentResolve.format = swapChainImageFormat;
+		colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		
+		VkAttachmentReference colorAttachmentRef{};
+		colorAttachmentRef.attachment = 0;
+		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		
 		VkAttachmentReference depthAttachmentRef{};
 		depthAttachmentRef.attachment = 1;
 		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		
+		VkAttachmentReference colorAttachmentResolveRef{};
+		colorAttachmentResolveRef.attachment = 2;
+		colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		
 		VkSubpassDescription subpass{};
 		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpass.colorAttachmentCount = 1;
 		subpass.pColorAttachments = &colorAttachmentRef;
 		subpass.pDepthStencilAttachment = &depthAttachmentRef;
+		subpass.pResolveAttachments = &colorAttachmentResolveRef;
 		
 		VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -591,10 +644,10 @@ struct VulkanTestApp {
         dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 		
-		std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+		std::array<VkAttachmentDescription, 3> attachments = {colorAttachment, depthAttachment, colorAttachmentResolve};
 		VkRenderPassCreateInfo renderPassInfo{};
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		renderPassInfo.attachmentCount = static_cast<uint32>(attachments.size());
 		renderPassInfo.pAttachments = attachments.data();
 		renderPassInfo.subpassCount = 1;
 		renderPassInfo.pSubpasses = &subpass;
@@ -628,7 +681,7 @@ struct VulkanTestApp {
 		
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+		layoutInfo.bindingCount = static_cast<uint32>(bindings.size());
 		layoutInfo.pBindings = bindings.data();
 		
 		if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
@@ -710,9 +763,9 @@ struct VulkanTestApp {
 		
 		VkPipelineMultisampleStateCreateInfo multisampling{}; //useful for anti-aliasing
 		multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-		multisampling.sampleShadingEnable = VK_FALSE;
-		multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		multisampling.minSampleShading = 1.0f;
+		multisampling.rasterizationSamples = msaaSamples; //VK_SAMPLE_COUNT_1_BIT to disable anti-aliasing
+		multisampling.sampleShadingEnable = VK_TRUE; //enable sample shading in the pipeline, VK_FALSE to disable
+		multisampling.minSampleShading = .2f; //min fraction for sample shading; closer to one is smoother
 		multisampling.pSampleMask = nullptr;
 		multisampling.alphaToCoverageEnable = VK_FALSE;
 		multisampling.alphaToOneEnable = VK_FALSE;
@@ -822,14 +875,22 @@ struct VulkanTestApp {
 		}
 	}
 	
+	//creates a color image with selected msaaSamples
+	//https://vulkan-tutorial.com/en/Multisampling
+	void createColorResources() {
+		VkFormat colorFormat = swapChainImageFormat;
+		
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
+		colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+	}
+	
 	//creates a depth buffer image after finding optimal settings
 	//https://vulkan-tutorial.com/en/Depth_buffering
 	void createDepthResources(){
 		std::cout << "{-}{-} Creating Depth Resources {-}{-}" << std::endl;
 		VkFormat depthFormat = findDepthFormat();
-		createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-		depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-		//transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL); //this causes errors on resize
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
+		depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 	}
 	
 	//creates a framebuffer per image view using the renderpass
@@ -838,15 +899,16 @@ struct VulkanTestApp {
 		std::cout << "{-}{-} Creating Framebuffers {-}{-}" << std::endl;
 		swapChainFramebuffers.resize(swapChainImageViews.size());
 		for (size_t i = 0; i < swapChainImageViews.size(); i++) {
-			std::array<VkImageView, 2> attachments = {
-				swapChainImageViews[i],
-				depthImageView
+			std::array<VkImageView, 3> attachments = {
+				colorImageView,
+				depthImageView,
+				swapChainImageViews[i]
 			};
 			
 			VkFramebufferCreateInfo framebufferInfo{};
 			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			framebufferInfo.renderPass = renderPass;
-			framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+			framebufferInfo.attachmentCount = static_cast<uint32>(attachments.size());
 			framebufferInfo.pAttachments = attachments.data();
 			framebufferInfo.width = swapChainExtent.width;
 			framebufferInfo.height = swapChainExtent.height;
@@ -865,6 +927,7 @@ struct VulkanTestApp {
 		int texWidth, texHeight, texChannels;
 		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		VkDeviceSize imageSize = texWidth * texHeight * 4;
+		mipLevels = static_cast<uint32>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 		
 		if (!pixels) {
 			throw std::runtime_error("failed to load texture image!");
@@ -881,21 +944,23 @@ struct VulkanTestApp {
 		
 		stbi_image_free(pixels);
 		
-		createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+		createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
+		//transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
 		
-		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32>(texWidth), static_cast<uint32>(texHeight));
 		
 		vkDestroyBuffer(device, stagingBuffer, nullptr);
 		vkFreeMemory(device, stagingBufferMemory, nullptr);
+		
+		generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
 	}
 	
 	//
 	//https://vulkan-tutorial.com/en/Texture_mapping/Image_view_and_sampler
 	void createTextureImageView(){
 		std::cout << "{-}{-} Creating Texture Image View {-}{-}" << std::endl;
-		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
 	}
 	
 	//used for filtering/anti-aliasing, this uses Repeat sampling
@@ -917,10 +982,10 @@ struct VulkanTestApp {
 		samplerInfo.unnormalizedCoordinates = VK_FALSE;
 		samplerInfo.compareEnable = VK_FALSE;
 		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR; //VK_SAMPLER_MIPMAP_MODE_NEAREST for more performance
 		samplerInfo.mipLodBias = 0.0f;
 		samplerInfo.minLod = 0.0f;
-		samplerInfo.maxLod = 0.0f;
+		samplerInfo.maxLod = static_cast<float>(mipLevels);
 		
 		if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create texture sampler!");
@@ -939,7 +1004,7 @@ struct VulkanTestApp {
             throw std::runtime_error(warn + err);
         }
 		
-		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+		std::unordered_map<Vertex, uint32> uniqueVertices{};
 		for (const auto& shape : shapes) {
 			for (const auto& index : shape.mesh.indices) {
 				Vertex vertex{};
@@ -951,7 +1016,7 @@ struct VulkanTestApp {
 				vertices.push_back(vertex);
 				
 				if (uniqueVertices.count(vertex) == 0) {
-					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+					uniqueVertices[vertex] = static_cast<uint32>(vertices.size());
 					vertices.push_back(vertex);
 				}
 				
@@ -1025,15 +1090,15 @@ struct VulkanTestApp {
 		std::cout << "{-}{-} Creating Descriptor Pool {-}{-}" << std::endl;
 		std::array<VkDescriptorPoolSize, 2> poolSizes{};
 		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSizes[0].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+		poolSizes[0].descriptorCount = static_cast<uint32>(swapChainImages.size());
 		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSizes[1].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+		poolSizes[1].descriptorCount = static_cast<uint32>(swapChainImages.size());
 		
 		VkDescriptorPoolCreateInfo poolInfo{};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolInfo.poolSizeCount = static_cast<uint32>(poolSizes.size());
 		poolInfo.pPoolSizes = poolSizes.data();
-		poolInfo.maxSets = static_cast<uint32_t>(swapChainImages.size());
+		poolInfo.maxSets = static_cast<uint32>(swapChainImages.size());
 		
 		if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create descriptor pool!");
@@ -1123,7 +1188,7 @@ struct VulkanTestApp {
 			std::array<VkClearValue, 2> clearValues{};
 			clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
 			clearValues[1].depthStencil = {1.0f, 0};
-			renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+			renderPassInfo.clearValueCount = static_cast<uint32>(clearValues.size());
 			renderPassInfo.pClearValues = clearValues.data();
 			
 			vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE); 
@@ -1414,7 +1479,7 @@ struct VulkanTestApp {
 			int width, height;
 			glfwGetFramebufferSize(window, &width, &height);
 			
-			VkExtent2D actualExtent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+			VkExtent2D actualExtent = { static_cast<uint32>(width), static_cast<uint32>(height) };
 			actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
 			actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));
 			
@@ -1428,7 +1493,7 @@ struct VulkanTestApp {
 		VkShaderModuleCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 		createInfo.codeSize = code.size();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+		createInfo.pCode = reinterpret_cast<const uint32*>(code.data());
 		
 		VkShaderModule shaderModule;
 		if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
@@ -1495,20 +1560,20 @@ struct VulkanTestApp {
 	}
 	
 	//creates and binds a vulkan image to the GPU
-	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+	void createImage(uint32 width, uint32 height, uint32 mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
 		VkImageCreateInfo imageInfo{};
 		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		imageInfo.imageType = VK_IMAGE_TYPE_2D;
 		imageInfo.extent.width = width;
 		imageInfo.extent.height = height;
 		imageInfo.extent.depth = 1;
-		imageInfo.mipLevels = 1;
+		imageInfo.mipLevels = mipLevels;
 		imageInfo.arrayLayers = 1;
 		imageInfo.format = format;
 		imageInfo.tiling = tiling;
 		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		imageInfo.usage = usage;
-		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.samples = numSamples;
 		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		
 		if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
@@ -1566,7 +1631,7 @@ struct VulkanTestApp {
 	}
 	
 	//converts a VkImage from one layout to another using an image memory barrier
-	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32 mipLevels) {
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 		
 		VkImageMemoryBarrier barrier{};
@@ -1578,7 +1643,7 @@ struct VulkanTestApp {
 		barrier.image = image;
 		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.levelCount = mipLevels;
 		barrier.subresourceRange.baseArrayLayer = 0;
 		barrier.subresourceRange.layerCount = 1;
 		
@@ -1597,13 +1662,13 @@ struct VulkanTestApp {
 			
 			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		} else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+		} /*else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
 			barrier.srcAccessMask = 0;
 			barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 			
 			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 			destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-		} else {
+		} */else {
 			throw std::invalid_argument("unsupported layout transition!");
 		}
 		
@@ -1613,7 +1678,7 @@ struct VulkanTestApp {
 	}
 	
 	
-	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
+	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32 width, uint32 height) {
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 		
 		VkBufferImageCopy region{};
@@ -1634,7 +1699,7 @@ struct VulkanTestApp {
 		endSingleTimeCommands(commandBuffer);
 	}
 	
-	VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
+	VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32 mipLevels) {
 		VkImageViewCreateInfo viewInfo{};
 		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		viewInfo.image = image;
@@ -1642,7 +1707,7 @@ struct VulkanTestApp {
 		viewInfo.format = format;
 		viewInfo.subresourceRange.aspectMask = aspectFlags;
 		viewInfo.subresourceRange.baseMipLevel = 0;
-		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.levelCount = mipLevels;
 		viewInfo.subresourceRange.baseArrayLayer = 0;
 		viewInfo.subresourceRange.layerCount = 1;
 		
@@ -1675,6 +1740,92 @@ struct VulkanTestApp {
 	
 	bool hasStencilComponent(VkFormat format) {
 		return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+	}
+	
+	//https://vulkan-tutorial.com/en/Generating_Mipmaps
+	void generateMipmaps(VkImage image, VkFormat imageFormat, int32 texWidth, int32 texHeight, uint32 mipLevels) {
+		// Check if image format supports linear blitting
+		VkFormatProperties formatProperties;
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
+		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+			throw std::runtime_error("texture image format does not support linear blitting!");
+		}
+		
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = image;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.levelCount = 1;
+		
+		int32 mipWidth = texWidth;
+		int32 mipHeight = texHeight;
+		for (uint32 i = 1; i < mipLevels; i++) {
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			
+			VkImageBlit blit{};
+			blit.srcOffsets[0] = { 0, 0, 0 };
+			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.srcSubresource.mipLevel = i - 1;
+			blit.srcSubresource.baseArrayLayer = 0;
+			blit.srcSubresource.layerCount = 1;
+			blit.dstOffsets[0] = { 0, 0, 0 };
+			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
+			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.dstSubresource.mipLevel = i;
+			blit.dstSubresource.baseArrayLayer = 0;
+			blit.dstSubresource.layerCount = 1;
+			
+			vkCmdBlitImage(commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+			
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			
+			if (mipWidth > 1) mipWidth /= 2;
+			if (mipHeight > 1) mipHeight /= 2;
+		}
+		
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		
+		vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+		
+		endSingleTimeCommands(commandBuffer);
+	}
+	
+	//https://vulkan-tutorial.com/en/Multisampling
+	VkSampleCountFlagBits getMaxUsableSampleCount() {
+		VkPhysicalDeviceProperties physicalDeviceProperties;
+		vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+		
+		VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+		if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+		if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+		if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+		if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+		if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+		if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+		
+		return VK_SAMPLE_COUNT_1_BIT;
 	}
 };
 
